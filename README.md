@@ -28,7 +28,6 @@ It's not magic. It's just a tight loop: you talk, it thinks, it acts, it tells y
 - Android phone with [Termux](https://termux.dev)
 - [Termux:API](https://wiki.termux.com/wiki/Termux:API) app installed
 - Node.js 18+
-- A free API key from [NVIDIA NIM](https://build.nvidia.com)
 
 ---
 
