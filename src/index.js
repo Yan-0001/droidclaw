@@ -19,6 +19,8 @@ require('./tools/state_tools');
 require('./tools/realworld');
 require('./tools/semantic_memory');
 require('./tools/social');
+require('./tools/self_modify');
+require('./tools/google');
 
 async function cmd(input, parts) {
   const sub = parts[1];
