@@ -55,14 +55,14 @@ This is the grain of sand.
 **Requirements:** Android phone + [Termux](https://f-droid.org/en/packages/com.termux/) + [Termux:API](https://f-droid.org/en/packages/com.termux.api/)
 
 ```bash
-pkg update && pkg install nodejs git
-git clone https://github.com/levilyf/droidclaw.git
-cd droidclaw
-npm install
-node src/index.js
+curl -fsSL https://raw.githubusercontent.com/levilyf/droidclaw/main/install.sh | bash
 ```
 
-First boot runs setup — Kira asks your name, provider, API key. Takes 2 minutes.
+```bash
+kira
+```
+
+That's it. First boot runs setup — Kira asks your name, provider, API key. Takes 2 minutes.
 
 ---
 
