@@ -3,6 +3,7 @@ const engine    = require('./engine');
 const registry  = require('../tools/registry');
 const heartbeat = require('./heartbeat');
 const state     = require('./state');
+const brain     = require('./brain');
 
 const MAX_ITER     = 10;
 const TOOL_TIMEOUT = 10000;
@@ -51,6 +52,7 @@ class AgentLoop {
     let hadError = false;
 
     onThink && onThink();
+    brain.pulse(userMessage, "user");
     let raw   = await engine.chat(userMessage);
     let tools = parseTools(raw);
     let reply = cleanReply(raw);

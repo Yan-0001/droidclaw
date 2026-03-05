@@ -63,7 +63,7 @@ function isDue(job) {
 async function notify(message) {
   // Try telegram first
   if (_telegram && _telegram.running) {
-    const cfg = require('./config').load();
+    const cfg = require('../config').load();
     const allowed = cfg.telegramAllowed || [];
     if (allowed.length) {
       try {

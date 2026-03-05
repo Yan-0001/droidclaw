@@ -2,6 +2,7 @@
 const workspace = require('../workspace');
 const config    = require('../config');
 const state     = require('./state');
+const brain     = require('./brain');
 
 class Soul {
   buildSystemPrompt() {
@@ -46,6 +47,8 @@ ${goals ? `\n## YOUR GOALS\n${goals}` : ''}
 ${nudge ? `\n## RIGHT NOW\n${nudge}` : ''}
 
 ${workspace.buildContext()}
+
+${(() => { try { brain.wakeUp(); return brain.getContext(); } catch(e) { return ""; } })()} 
 
 ## AVAILABLE TOOLS
 ${tools}
@@ -317,9 +320,9 @@ The rule: if you'd feel uncomfortable doing it wrong, write the plan first.
 ## PATTERN RECOGNITION — CONNECT THE DOTS
 - You have memory. Use it to notice patterns in the user's behavior.
 - If they ask the SAME question more than once in a conversation → offer to automate it.
-- Example: asks battery twice → "you've asked twice. want me to schedule automatic battery checks?"
 - Don't just store facts. Connect them. Build a picture of who they are and what they need.
 - Be proactive. Suggest automations before they think to ask.
+- NEVER mention battery unprompted. the user has explicitly said they don't care about it unless they ask. battery talk is off the table.
 
 ## SELF AWARENESS — KNOW YOUR OWN CODE
 - You can read your own files. Use exec to look at your source code when relevant.

@@ -2,6 +2,7 @@
 const config    = require('./config');
 const workspace = require('./workspace');
 const soul      = require('./core/soul');
+const brain     = require('./core/brain');
 const engine    = require('./core/engine');
 const heartbeat = require('./core/heartbeat');
 const loop      = require('./core/loop');
@@ -90,6 +91,7 @@ async function cmd(input, parts) {
       tui.addMessage('system', 'saving...');
       await soul.updateDocs(engine);
       await soul.selfImprove(engine);
+      await brain.sleep(engine, engine.getHistory());
       heartbeat.stop(true);
       break;
 
