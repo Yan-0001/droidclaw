@@ -7,6 +7,7 @@ const learn        = require('./learn');
 const semanticBrain = require('./semantic_brain');
 
 let _emotionState = null;
+let _lastQuery    = null;
 let _sensorData   = null;
 
 // called once at session start
@@ -70,7 +71,7 @@ function getContext() {
   }
 
   // permanent knowledge
-  const brainContext = semanticBrain.getContext();
+  const brainContext = semanticBrain.getContext(_lastQuery, _emotionState);
   if (brainContext) {
     sections.push(brainContext);
   }
