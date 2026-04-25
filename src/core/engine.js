@@ -1,7 +1,6 @@
 'use strict';
-const iris          = require('./iris');
-const brain         = require('./brain');
-const semanticBrain = require('./semantic_brain');
+const iris   = require('./iris');
+const mind   = require('./mind');
 const config = require('../config');
 
 class Engine {
@@ -15,13 +14,12 @@ class Engine {
   async chat(userMessage) {
     const cfg = config.load();
     if (!cfg.apiKey) throw new Error('no API key set. run /config');
-    const system = this.soul ? this.soul.buildSystemPrompt() : 'You are DroidClaw.';
+    const system = this.soul ? this.soul.buildSystemPrompt(userMessage) : 'You are Kira — an AI agent living on Android/Termux. Speak lowercase, be direct, use your tools.';
     this.history.push({ role: 'user', content: userMessage });
-    // Trim history to last 40 messages to avoid token overflow
     if (this.history.length > 20) this.history = this.history.slice(-20);
-    const emotionState = brain.getEmotionState();
-    const lpmData      = semanticBrain.loadBrain();
-    const routing      = iris.route(userMessage, emotionState, lpmData.lpm);
+    const emotionState = _readEmotion();
+    const lpm          = _readLPM();
+    const routing      = iris.route(userMessage, emotionState, lpm);
     const irisSystem   = system + '\n\n' + routing.styleInjection;
     const reply        = await this._request(irisSystem, this.history, cfg, 3, routing.profile.maxTokens);
     this.history.push({ role: 'assistant', content: reply });
@@ -32,6 +30,156 @@ class Engine {
     const cfg = config.load();
     if (!cfg.apiKey) throw new Error('no API key set');
     return await this._request(null, [{ role: 'user', content: prompt }], cfg);
+  }
+
+  // ── Streaming chat ──────────────────────────────────────────────────────────
+  // onToken(text) called for each chunk as it arrives
+  // onDone(fullText) called when stream ends
+  // returns AbortController so caller can cancel mid-stream
+  chatStream(userMessage, onToken, onDone) {
+    const cfg = config.load();
+    if (!cfg.apiKey) { onDone(''); return null; }
+
+    const system     = this.soul ? this.soul.buildSystemPrompt(userMessage) : 'You are Kira.';
+    this.history.push({ role: 'user', content: userMessage });
+    if (this.history.length > 20) this.history = this.history.slice(-20);
+
+    const emotionState = _readEmotion();
+    const lpm          = _readLPM();
+    const routing      = iris.route(userMessage, emotionState, lpm);
+    const irisSystem   = system + '\n\n' + routing.styleInjection;
+
+    const controller = new AbortController();
+
+    // run async, return controller immediately so TUI can abort
+    this._streamRequest(irisSystem, this.history, cfg, routing.profile.maxTokens, controller.signal, onToken)
+      .then(fullText => {
+        this.history.push({ role: 'assistant', content: fullText });
+        onDone && onDone(fullText);
+      })
+      .catch(err => {
+        if (err.name === 'AbortError') {
+          // clean up history — remove the user message we pushed
+          this.history = this.history.slice(0, -1);
+          onDone && onDone(null); // null = interrupted
+        } else {
+          onDone && onDone('');
+        }
+      });
+
+    return controller;
+  }
+
+  async _streamRequest(system, messages, cfg, maxTokens, signal, onToken) {
+    if (this._isAnthropic(cfg)) {
+      return await this._streamAnthropic(system, messages, cfg, maxTokens, signal, onToken);
+    }
+    return await this._streamOpenAI(system, messages, cfg, maxTokens, signal, onToken);
+  }
+
+  async _streamOpenAI(system, messages, cfg, maxTokens, signal, onToken) {
+    const msgs = system ? [{ role: 'system', content: system }, ...messages] : messages;
+    const res  = await fetch(`${cfg.baseUrl}/chat/completions`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+      body:    JSON.stringify({ model: cfg.model, messages: msgs, max_tokens: maxTokens || 2048, stream: true }),
+      signal,
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`API ${res.status}: ${err.slice(0, 200)}`);
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   full    = '';
+    let   buf     = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        // flush remaining buffer — this fixes incomplete last sentences
+        if (buf.trim()) {
+          const trimmed = buf.trim();
+          if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
+            try {
+              const json  = JSON.parse(trimmed.slice(6));
+              const token = json.choices?.[0]?.delta?.content || '';
+              if (token) { full += token; onToken && onToken(token); }
+            } catch {}
+          }
+        }
+        break;
+      }
+
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop(); // keep incomplete line in buffer
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed === 'data: [DONE]') continue;
+        if (!trimmed.startsWith('data: ')) continue;
+        try {
+          const json  = JSON.parse(trimmed.slice(6));
+          const token = json.choices?.[0]?.delta?.content || '';
+          if (token) { full += token; onToken && onToken(token); }
+        } catch {}
+      }
+    }
+
+    return full;
+  }
+
+  async _streamAnthropic(system, messages, cfg, maxTokens, signal, onToken) {
+    const body = { model: cfg.model || 'claude-sonnet-4-6', max_tokens: maxTokens || 2048, messages, stream: true };
+    if (system) body.system = system;
+
+    const res = await fetch(`${cfg.baseUrl}/messages`, {
+      method:  'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': cfg.apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify(body),
+      signal,
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Anthropic ${res.status}: ${err.slice(0, 200)}`);
+    }
+
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
+    let   full    = '';
+    let   buf     = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data: ')) continue;
+        try {
+          const json  = JSON.parse(trimmed.slice(6));
+          if (json.type === 'content_block_delta') {
+            const token = json.delta?.text || '';
+            if (token) { full += token; onToken && onToken(token); }
+          }
+        } catch {}
+      }
+    }
+
+    return full;
   }
 
   _isAnthropic(cfg) {
@@ -103,6 +251,27 @@ class Engine {
   }
 
   _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+}
+
+function _readEmotion() {
+  try {
+    return {
+      tension:    parseFloat(mind.getState('emotion_tension')    || 0),
+      connection: parseFloat(mind.getState('emotion_connection') || 0.5),
+      energy:     parseFloat(mind.getState('emotion_energy')     || 0.8),
+      focus:      parseFloat(mind.getState('emotion_focus')      || 0.5),
+    };
+  } catch { return { tension: 0, connection: 0.5, energy: 0.8, focus: 0.5 }; }
+}
+
+function _readLPM() {
+  const lpm = { identity: [], patterns: [], triggers: [], needs: [], foresight: [] };
+  try {
+    mind.getBeliefs(null, 0.5).forEach(b => {
+      if (lpm[b.dimension]) lpm[b.dimension].push(b.value);
+    });
+  } catch {}
+  return lpm;
 }
 
 module.exports = new Engine();

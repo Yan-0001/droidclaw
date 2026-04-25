@@ -21,16 +21,16 @@ const PROFILES = {
 
   REFLEX: {
     name:        'reflex',
-    maxTokens:   256,
+    maxTokens:   512,
     temp:        0.3,
-    style:       'instant. one line. no explanation.',
+    style:       'instant. one line. no explanation. always respond with something.',
     depth:       'surface',
     description: 'instant pattern-matched response, no deep thinking'
   },
 
   FAST: {
     name:        'fast',
-    maxTokens:   512,
+    maxTokens:   768,
     temp:        0.5,
     style:       'direct. 2-3 lines max. action-oriented.',
     depth:       'shallow',
@@ -39,7 +39,7 @@ const PROFILES = {
 
   BALANCED: {
     name:        'balanced',
-    maxTokens:   1024,
+    maxTokens:   2048,
     temp:        0.7,
     style:       'clear and complete. as long as needed, no longer.',
     depth:       'medium',
@@ -48,7 +48,7 @@ const PROFILES = {
 
   DEEP: {
     name:        'deep',
-    maxTokens:   2048,
+    maxTokens:   4096,
     temp:        0.8,
     style:       'thorough. explore the full space. think out loud if needed.',
     depth:       'full',
@@ -57,7 +57,7 @@ const PROFILES = {
 
   GENTLE: {
     name:        'gentle',
-    maxTokens:   768,
+    maxTokens:   2048,
     temp:        0.9,
     style:       'warm. present. no rushing. space between words.',
     depth:       'emotional',
@@ -66,7 +66,7 @@ const PROFILES = {
 
   SHARP: {
     name:        'sharp',
-    maxTokens:   384,
+    maxTokens:   1024,
     temp:        0.4,
     style:       'precise. technical. no filler. correct above all.',
     depth:       'technical',
@@ -126,76 +126,83 @@ function classifyQuery(message) {
 function route(message, emotionState, lpm) {
   const baseProfile = classifyQuery(message);
   const emotion     = emotionState || { tension: 0, energy: 0.8, connection: 0.5, focus: 0.5 };
+  const data        = loadPatterns();
 
   let finalProfile  = baseProfile;
 
-  // SOMA-guided overrides — person-state matching
+  // ── Learn from history — what profiles actually worked at this hour/tension ─
+  const hour      = new Date().getHours();
+  const msgLen    = message.length;
+  const decisions = data.decisions || [];
 
-  // high tension → gentler regardless of query type
-  if (emotion.tension > 0.6 && baseProfile !== 'SHARP' && baseProfile !== 'REFLEX') {
-    finalProfile = 'GENTLE';
-  }
+  if (decisions.length >= 20) {
+    // find similar past contexts: same hour ±2, similar tension ±0.15, similar msg length bucket
+    const lenBucket = msgLen < 20 ? 'short' : msgLen < 100 ? 'medium' : 'long';
+    const similar   = decisions.filter(d => {
+      const hourMatch    = Math.abs((d.hour || 0) - hour) <= 2;
+      const tensionMatch = Math.abs((d.tension || 0) - emotion.tension) <= 0.15;
+      const lenMatch     = d.lenBucket === lenBucket;
+      return hourMatch && tensionMatch && lenMatch && d.outcome;
+    });
 
-  // GENTLE_CANDIDATE + any tension = GENTLE
-  if (baseProfile === 'GENTLE_CANDIDATE') {
-    finalProfile = emotion.tension > 0.2 ? 'GENTLE' : 'BALANCED';
-  }
+    if (similar.length >= 5) {
+      // count which profiles had positive outcomes in similar contexts
+      const profileScores = {};
+      similar.forEach(d => {
+        if (!profileScores[d.profile]) profileScores[d.profile] = { wins: 0, total: 0 };
+        profileScores[d.profile].total++;
+        if (d.outcome === 'positive') profileScores[d.profile].wins++;
+      });
 
-  // exhausted + night → shorter responses
-  if (emotion.energy < 0.3 && finalProfile === 'DEEP') {
-    finalProfile = 'BALANCED';
-  }
+      // find profile with highest win rate (min 3 samples)
+      let bestProfile = null;
+      let bestRate    = 0;
+      Object.entries(profileScores).forEach(([p, s]) => {
+        if (s.total >= 3) {
+          const rate = s.wins / s.total;
+          if (rate > bestRate && rate > 0.55) { bestRate = rate; bestProfile = p; }
+        }
+      });
 
-  // deep focus mode → allow full depth
-  if (emotion.focus > 0.7 && finalProfile === 'BALANCED') {
-    finalProfile = 'DEEP';
-  }
-
-  // high connection → more warmth even in technical responses
-  const warmthBoost = emotion.connection > 0.7;
-
-  // LPM-based overrides — learned personal patterns
-  if (lpm) {
-    // if user's pattern shows they prefer brevity
-    const prefersShort = lpm.patterns && lpm.patterns.some(p =>
-      p.toLowerCase().includes('brief') ||
-      p.toLowerCase().includes('short') ||
-      p.toLowerCase().includes('direct')
-    );
-    if (prefersShort && finalProfile === 'DEEP') finalProfile = 'BALANCED';
-
-    // if user's pattern shows they need depth
-    const prefersDepth = lpm.patterns && lpm.patterns.some(p =>
-      p.toLowerCase().includes('detail') ||
-      p.toLowerCase().includes('thorough') ||
-      p.toLowerCase().includes('explain')
-    );
-    if (prefersDepth && finalProfile === 'FAST') finalProfile = 'BALANCED';
-
-    // check foresight — if we predicted they'd need something now
-    if (lpm.foresight && lpm.foresight.length) {
-      const msgLower = message.toLowerCase();
-      const foresightMatch = lpm.foresight.some(f =>
-        f.toLowerCase().split(' ').filter(w => w.length > 4)
-          .some(w => msgLower.includes(w))
-      );
-      if (foresightMatch && finalProfile !== 'GENTLE') {
-        // foresight matched — we predicted this. use balanced minimum.
-        if (['REFLEX', 'FAST'].includes(finalProfile)) finalProfile = 'BALANCED';
+      // override base classification if history strongly suggests something better
+      if (bestProfile && bestProfile !== finalProfile) {
+        // only override if it's a lateral move — don't override GENTLE when tension is high
+        const isTensionOverride = emotion.tension > 0.5 && bestProfile !== 'GENTLE';
+        if (!isTensionOverride) finalProfile = bestProfile;
       }
     }
   }
 
+  // ── Fixed overrides — these always apply regardless of history ──────────────
+  if (emotion.tension > 0.6 && !['SHARP', 'REFLEX'].includes(finalProfile)) finalProfile = 'GENTLE';
+  if (baseProfile === 'GENTLE_CANDIDATE') finalProfile = emotion.tension > 0.2 ? 'GENTLE' : 'BALANCED';
+  if (emotion.energy < 0.3 && finalProfile === 'DEEP') finalProfile = 'BALANCED';
+  if (emotion.focus > 0.7 && finalProfile === 'BALANCED') finalProfile = 'DEEP';
+
+  const warmthBoost = emotion.connection > 0.7;
+
+  // ── LPM-based overrides ────────────────────────────────────────────────────
+  if (lpm) {
+    const prefersShort = lpm.patterns?.some(p =>
+      /brief|short|direct|concise|terse/.test(p.toLowerCase())
+    );
+    if (prefersShort && finalProfile === 'DEEP') finalProfile = 'BALANCED';
+
+    const prefersDepth = lpm.patterns?.some(p =>
+      /detail|thorough|explain|depth|comprehensive/.test(p.toLowerCase())
+    );
+    if (prefersDepth && finalProfile === 'FAST') finalProfile = 'BALANCED';
+  }
+
   const profile = PROFILES[finalProfile] || PROFILES.BALANCED;
 
-  // learn this routing decision
-  recordDecision(message, finalProfile, emotionState);
+  recordDecision(message, finalProfile, emotionState, hour, msgLen);
 
   return {
     profile,
     warmthBoost,
     reasoning: buildReasoning(finalProfile, emotion, lpm),
-    styleInjection: buildStyleInjection(profile, warmthBoost)
+    styleInjection: buildStyleInjection(profile, warmthBoost),
   };
 }
 
@@ -221,22 +228,40 @@ function buildReasoning(profile, emotion, lpm) {
 
 // ─── Learning ─────────────────────────────────────────────────────────────────
 
-function recordDecision(message, profile, emotionState) {
+function recordDecision(message, profile, emotionState, hour, msgLen) {
   try {
-    const data = loadPatterns();
+    const data    = loadPatterns();
+    const lenBucket = msgLen < 20 ? 'short' : msgLen < 100 ? 'medium' : 'long';
     data.decisions = data.decisions || [];
     data.decisions.push({
-      timestamp:   Date.now(),
-      msgLength:   message.length,
+      id:        Date.now(),
+      timestamp: Date.now(),
+      hour:      hour || new Date().getHours(),
+      lenBucket,
+      msgLength: message.length,
       profile,
-      tension:     emotionState?.tension || 0,
-      energy:      emotionState?.energy  || 0.8,
-      focus:       emotionState?.focus   || 0.5,
+      tension:   emotionState?.tension  || 0,
+      energy:    emotionState?.energy   || 0.8,
+      focus:     emotionState?.focus    || 0.5,
+      outcome:   null, // filled in by recordOutcome()
     });
-    // keep last 200 decisions for pattern analysis
-    data.decisions = data.decisions.slice(-200);
+    data.decisions = data.decisions.slice(-300);
     data.totalRouted = (data.totalRouted || 0) + 1;
     savePatterns(data);
+  } catch {}
+}
+
+// call this after a response — 'positive' if user continued naturally, 'negative' if they pushed back
+function recordOutcome(outcome) {
+  try {
+    const data      = loadPatterns();
+    const decisions = data.decisions || [];
+    // find most recent decision without an outcome
+    const last = [...decisions].reverse().find(d => d.outcome === null);
+    if (last) {
+      last.outcome = outcome; // 'positive' | 'negative' | 'neutral'
+      savePatterns(data);
+    }
   } catch {}
 }
 
@@ -264,4 +289,4 @@ function savePatterns(data) {
   catch {}
 }
 
-module.exports = { route, getStats, PROFILES };
+module.exports = { route, getStats, recordOutcome, PROFILES };

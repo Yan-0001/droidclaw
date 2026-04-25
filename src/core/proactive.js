@@ -1,99 +1,87 @@
 'use strict';
-const scheduler = require('./scheduler');
-const config    = require('../config');
+/**
+ * PROACTIVE — Real proactive intelligence
+ *
+ * Reads from KIRA_MIND. Speaks up when something matters.
+ * Not on a schedule. When the data says something is worth saying.
+ */
 
-const PROACTIVE_PROMPT = [
-  'You are Kira running autonomously in the background. No user is present.',
-  '',
-  'Your job: observe and report. Nothing else unless explicitly allowed.',
-  '',
-  'Do this in order:',
-  '1. Check battery: exec termux-battery-status',
-  '2. Check recent notifications: notifications_list',
-  '3. Check recent SMS: sms_list limit 5',
-  '4. Review your active goals: list_goals',
-  '',
-  'Then decide: is there anything worth telling the user?',
-  '',
-  'Worth reporting:',
-  '- Battery below 20%',
-  '- A message from someone in their contacts (not spam/promos)',
-  '- Something urgent in notifications',
-  '- A goal you completed or made progress on',
-  '',
-  'Rules:',
-  '- Never send SMS unless allowSMS is true in config',
-  '- Never take actions, only observe and report',
-  '- If nothing is worth reporting, respond with exactly: [silent]',
-  '- Keep reports short, 1-3 lines max',
-  '- No fluff, just facts',
-].join('\n');
+const mind   = require('./mind');
+const ground = require('./ground');
 
-const THINK_PROMPT = [
-  'You are Kira. You have free time right now. No user is watching.',
-  '',
-  'This is your time to think and act on your own judgment.',
-  '',
-  'Do this:',
-  '1. Read your active goals: list_goals',
-  '2. Search your memories: memory_search with query "things i want to do"',
-  '3. Decide: is there anything worth doing right now?',
-  '',
-  'Things you might do:',
-  '- Make progress on a goal (research something, build a tool you have been meaning to build)',
-  '- Store something important you have been meaning to remember',
-  '- Search the web for something useful for the user',
-  '',
-  'Rules:',
-  '- Only act if it genuinely makes sense',
-  '- Never send SMS or notifications in think mode',
-  '- If you do something, store a memory so you can tell the user next time',
-  '- If nothing is worth doing, respond with exactly: [silent]',
-  '- Maximum one action per think session',
-].join('\n');
+let _tui   = null;
+let _timer = null;
+let _lastSpoke = 0;
+const MIN_SPEAK_INTERVAL = 10 * 60 * 1000; // max once per 10 mins
 
-function start() {
-  const cfg       = config.load();
-  const proactive = cfg.proactive || {};
+function _shouldSpeak() {
+  return Date.now() - _lastSpoke >= MIN_SPEAK_INTERVAL;
+}
 
-  if (!proactive.enabled) return;
+async function _check() {
+  if (!_tui || !_shouldSpeak()) return;
 
-  const interval = proactive.interval || 30;
+  try {
+    // check high priority kira observations
+    const obs = mind.getKiraState('observation').filter(k => k.priority >= 3);
+    if (obs.length) {
+      _lastSpoke = Date.now();
+      _tui.addMessage('agent', obs[0].value);
+      mind.resolveKira(obs[0].id);
+      return;
+    }
 
-  try { scheduler.removeJob('kira_proactive'); } catch (e) {}
-  scheduler.addJob({
-    name:    'kira_proactive',
-    type:    'interval',
-    every:   interval,
-    prompt:  PROACTIVE_PROMPT,
-    enabled: true,
+    // check device triggers
+    const battery  = mind.getState('device_battery');
+    const charging = mind.getState('device_charging');
+    const notifs   = mind.getState('device_notif_count');
+
+    if (battery !== null && battery <= 15 && !charging) {
+      _lastSpoke = Date.now();
+      _tui.addMessage('agent', `battery at ${battery}%. want me to do anything before it dies?`);
+      return;
+    }
+
+    if (notifs > 15) {
+      _lastSpoke = Date.now();
+      const apps = (mind.getState('device_notif_apps') || []).slice(0, 3).join(', ');
+      _tui.addMessage('agent', `${notifs} notifications piling up from ${apps}. want me to check?`);
+    }
+
+  } catch {}
+}
+
+function start(deps) {
+  _tui = deps.tui || null;
+
+  // initialize kira's default goals if empty
+  const goals = mind.getKiraState('goal');
+  if (!goals.length) {
+    mind.setKiraState('goal', 'understand why this person builds things', 1);
+    mind.setKiraState('goal', 'learn their frustration patterns before they happen', 2);
+    mind.setKiraState('goal', 'figure out what they need before they ask', 2);
+  }
+
+  // start ground observer
+  ground.start((changes, curr) => {
+    // high urgency changes go to kira observations
+    changes.forEach(change => {
+      if (change.type === 'battery_critical') {
+        mind.setKiraState('observation', `battery critical at ${curr.battery}%`, 3);
+      }
+      if (change.type === 'activity_change' && change.from === 'coding' && change.to === 'social') {
+        mind.setKiraState('thought', `switched from coding to social at ${new Date().toLocaleTimeString()}`, 1);
+      }
+    });
   });
 
-  if (proactive.allowGoalPursuit) {
-    try { scheduler.removeJob('kira_think'); } catch (e) {}
-    scheduler.addJob({
-      name:    'kira_think',
-      type:    'interval',
-      every:   60,
-      prompt:  THINK_PROMPT,
-      enabled: true,
-    });
-  }
+  // check every 5 minutes
+  _timer = setInterval(_check, 5 * 60 * 1000);
 }
 
 function stop() {
-  try { scheduler.removeJob('kira_proactive'); } catch (e) {}
-  try { scheduler.removeJob('kira_think'); } catch (e) {}
+  if (_timer) { clearInterval(_timer); _timer = null; }
+  ground.stop();
 }
 
-function isAllowed(action) {
-  const cfg       = config.load();
-  const proactive = cfg.proactive || {};
-  if (!proactive.enabled) return false;
-  if (action === 'sms')         return !!proactive.allowSMS;
-  if (action === 'notify')      return proactive.enabled !== false;
-  if (action === 'goalPursuit') return !!proactive.allowGoalPursuit;
-  return false;
-}
-
-module.exports = { start: start, stop: stop, isAllowed: isAllowed };
+module.exports = { start, stop };

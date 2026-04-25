@@ -1,5 +1,19 @@
 'use strict';
-const { execSync } = require('child_process');
+const { spawnSync } = require('child_process');
+
+const TERMUX_BIN = '/data/data/com.termux/files/usr/bin';
+const ENV = { ...process.env, PATH: `${TERMUX_BIN}:${process.env.PATH || ''}` };
+
+function _run(cmd) {
+  const result = spawnSync(cmd, [], {
+    encoding: 'utf8',
+    timeout:  8000,
+    shell:    true,
+    env:      ENV,
+  });
+  if (result.error || result.status !== 0) return null;
+  return result.stdout;
+}
 
 // read phone state and return structured sensor data
 function read() {
@@ -15,16 +29,22 @@ function read() {
 
   // battery
   try {
-    const bat = JSON.parse(execSync('termux-battery-status', { encoding: 'utf8', timeout: 3000 }));
-    result.battery  = bat.percentage;
-    result.temp     = bat.temperature;
-    result.charging = bat.status === 'CHARGING' || bat.status === 'FULL';
+    const out = _run('termux-battery-status');
+    if (out) {
+      const bat = JSON.parse(out);
+      result.battery  = bat.percentage;
+      result.temp     = bat.temperature;
+      result.charging = bat.status === 'CHARGING' || bat.status === 'FULL';
+    }
   } catch {}
 
   // wifi
   try {
-    const wifi = JSON.parse(execSync('termux-wifi-connectioninfo', { encoding: 'utf8', timeout: 3000 }));
-    result.wifi = wifi.ssid || null;
+    const out = _run('termux-wifi-connectioninfo');
+    if (out) {
+      const wifi = JSON.parse(out);
+      result.wifi = wifi.ssid || null;
+    }
   } catch {}
 
   // derive body state

@@ -1,11 +1,7 @@
 'use strict';
-const fs       = require('fs');
-const path     = require('path');
-const os       = require('os');
 const config   = require('../config');
 const registry = require('./registry');
-
-const MEMORY_FILE = path.join(os.homedir(), '.droidclaw', 'semantic_memory.json');
+const mind     = require('../core/mind');
 
 const EMBED_MODELS = {
   'integrate.api.nvidia.com': 'nvidia/llama-3.2-nv-embedqa-1b-v2',
@@ -21,17 +17,6 @@ function getEmbedModel(baseUrl) {
   return null;
 }
 
-function load() {
-  try { return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8')); }
-  catch { return []; }
-}
-
-function save(entries) {
-  const dir = path.join(os.homedir(), '.droidclaw');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(MEMORY_FILE, JSON.stringify(entries, null, 2));
-}
-
 async function embed(text) {
   const cfg   = config.load();
   const model = getEmbedModel(cfg.baseUrl);
@@ -44,67 +29,46 @@ async function embed(text) {
     });
     if (!res.ok) return null;
     const data = await res.json();
-    return data.data && data.data[0] && data.data[0].embedding || null;
+    return data.data?.[0]?.embedding || null;
   } catch { return null; }
 }
 
-function cosine(a, b) {
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i]; normA += a[i] * a[i]; normB += b[i] * b[i];
-  }
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-function keywordScore(text, query) {
-  const words  = query.toLowerCase().split(/\s+/);
-  const target = text.toLowerCase();
-  return words.filter(function(w) { return target.includes(w); }).length / words.length;
+function _timeAgo(ts) {
+  const hours = Math.round((Date.now() / 1000 - ts) / 3600);
+  if (hours < 1)  return 'just now';
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
 }
 
 registry.register('memory_store', async function(args) {
-  const text = args.text, tags = args.tags;
+  const { text, tags } = args;
   if (!text) return 'error: text required';
-  const vector  = await embed(text);
-  const entries = load();
-  entries.push({ id: Date.now(), text, tags: tags || [], vector: vector || null, createdAt: new Date().toISOString() });
-  save(entries);
-  return 'stored: "' + text.slice(0, 80) + '"';
-}, 'store a memory with semantic search capability');
+  mind.storeMemory(text, { importance: 0.7, tags: tags || [], theme: 'explicit' });
+  return `remembered: "${text.slice(0, 80)}"`;
+}, 'store a memory into Kira\'s unified memory system');
 
 registry.register('memory_search', async function(args) {
-  const query = args.query, limit = args.limit;
+  const { query, limit } = args;
   if (!query) return 'error: query required';
   const n       = parseInt(limit) || 5;
-  const entries = load();
-  if (!entries.length) return 'no memories stored yet.';
-  const queryVec = await embed(query);
-  const scored = entries.map(function(e) {
-    const score = (queryVec && e.vector) ? cosine(queryVec, e.vector) : keywordScore(e.text, query);
-    return Object.assign({}, e, { score: score });
-  }).sort(function(a, b) { return b.score - a.score; }).slice(0, n).filter(function(e) { return e.score > 0.1; });
-  if (!scored.length) return 'no relevant memories found.';
-  const mode = (scored[0] && scored[0].vector && queryVec) ? 'semantic' : 'keyword';
-  return '[' + mode + ' search]\n' + scored.map(function(e, i) {
-    return (i + 1) + '. [' + new Date(e.createdAt).toLocaleDateString() + '] ' + e.text;
-  }).join('\n');
-}, 'search memories by meaning');
+  const emotion = {
+    tension:    parseFloat(mind.getState('emotion_tension')    || 0),
+    connection: parseFloat(mind.getState('emotion_connection') || 0.5),
+  };
+  const results = mind.retrieveMemories(query, n, emotion);
+  if (!results.length) return 'no relevant memories found.';
+  return results.map((m, i) => `${i + 1}. [${_timeAgo(m.last_touched)}] ${m.text}`).join('\n');
+}, 'search Kira\'s memory by meaning');
 
 registry.register('memory_list_all', async function(args) {
-  const entries = load();
-  if (!entries.length) return 'no memories stored.';
-  const n = parseInt(args.limit) || 20;
-  return entries.slice(-n).reverse().map(function(e, i) {
-    return (i + 1) + '. [' + new Date(e.createdAt).toLocaleDateString() + '] ' + e.text;
-  }).join('\n');
-}, 'list all stored memories');
+  const n   = parseInt(args.limit) || 20;
+  const all = mind.retrieveMemories('', n);
+  if (!all.length) return 'no memories stored.';
+  return all.map((m, i) => `${i + 1}. [${_timeAgo(m.last_touched)}] ${m.text}`).join('\n');
+}, 'list recent memories');
 
 registry.register('memory_delete_semantic', async function(args) {
-  const entries  = load();
-  const filtered = entries.filter(function(e) { return String(e.id) !== String(args.id); });
-  if (filtered.length === entries.length) return 'memory not found.';
-  save(filtered);
-  return 'deleted.';
-}, 'delete a memory by id');
+  return 'use memory_search to find the memory first, then it will decay naturally over time.';
+}, 'memories decay naturally — no manual deletion needed');
 
-module.exports = { embed: embed, load: load, save: save };
+module.exports = { embed };

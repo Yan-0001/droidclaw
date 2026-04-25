@@ -37,7 +37,11 @@ class Telegram {
           this._handle(u, log); // don't await — handle concurrently
         }
       } catch (e) {
-        log && log('poll error: ' + e.message);
+        // silence common network errors — these are expected on mobile
+        const isNetworkError = /ECONNRESET|ECONNABORTED|ETIMEDOUT|ENOTFOUND|socket hang up|network/i.test(e.message);
+        if (!isNetworkError) {
+          log && log('tg error: ' + e.message);
+        }
         await this._sleep(5000);
       }
       await this._sleep(1000);

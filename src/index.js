@@ -1,8 +1,10 @@
 'use strict';
+const chalk     = require('chalk');
 const config    = require('./config');
 const workspace = require('./workspace');
 const soul      = require('./core/soul');
-const brain     = require('./core/brain');
+const mind      = require('./core/mind');
+const nexus     = require('./core/nexus');
 const engine    = require('./core/engine');
 const heartbeat = require('./core/heartbeat');
 const loop      = require('./core/loop');
@@ -113,7 +115,7 @@ async function cmd(input, parts) {
       tui.addMessage('system', 'saving...');
       await soul.updateDocs(engine);
       await soul.selfImprove(engine);
-      await brain.sleep(engine, engine.getHistory());
+      await nexus.sleep(engine);
       heartbeat.stop(true);
       break;
 
@@ -128,6 +130,12 @@ async function main() {
     await setup.run();
   }
 
+  // initialize KIRA_MIND database — the single source of truth
+  mind.init();
+
+  // migrate from old JSON files if they exist
+  try { mind.migrateFromJSON(); } catch {}
+
   workspace.init();
   engine.init(soul);
   heartbeat.start();
@@ -138,22 +146,135 @@ async function main() {
       return;
     }
 
+    // if already thinking — abort current stream and queue new message
+    if (tui.thinking) {
+      loop.abort();
+      tui.setThinking(false);
+      process.stdout.write('\n' + chalk.hex('#7a4060')('  ↩ interrupted\n'));
+    }
+
+    // token buffer for filtering tool tags and think blocks mid-stream
+    let _tokenBuf   = '';
+    let _inToolTag  = false;
+    let _inThinkTag = false;
+
     tui.setThinking(true);
     try {
       await loop.run(
         input,
+        // onThink
         () => {},
+        // onToken — filter tool tags and <think> blocks, write clean text live
+        (token) => {
+          _tokenBuf += token;
+
+          // ── Filter <think>...</think> blocks (reasoning models) ───────────
+          if (!_inThinkTag && _tokenBuf.includes('<think>')) {
+            _inThinkTag = true;
+            // print everything before <think>
+            const tagStart = _tokenBuf.indexOf('<think>');
+            const before   = _tokenBuf.slice(0, tagStart);
+            _tokenBuf      = _tokenBuf.slice(tagStart);
+            if (before.trim()) {
+              if (!tui._streamStarted) {
+                tui._streamStarted = true;
+                if (tui._dots) { clearInterval(tui._dots); tui._dots = null; }
+                tui.thinking = false;
+                process.stdout.write('\x1b[2K\r');
+                tui._kiraPrompt();
+              }
+              process.stdout.write(chalk.hex('#fce8f0')(before));
+            }
+            return;
+          }
+
+          if (_inThinkTag) {
+            if (_tokenBuf.includes('</think>')) {
+              // discard everything inside think block, keep after
+              const after = _tokenBuf.slice(_tokenBuf.indexOf('</think>') + 8);
+              _tokenBuf   = after;
+              _inThinkTag = false;
+              if (after.trim()) {
+                if (!tui._streamStarted) {
+                  tui._streamStarted = true;
+                  if (tui._dots) { clearInterval(tui._dots); tui._dots = null; }
+                  tui.thinking = false;
+                  process.stdout.write('\x1b[2K\r');
+                  tui._kiraPrompt();
+                }
+                process.stdout.write(chalk.hex('#fce8f0')(after));
+                _tokenBuf = '';
+              }
+            }
+            return;
+          }
+
+          // ── Filter <tool:...> blocks ──────────────────────────────────────
+          // detect entering a tool tag
+          if (!_inToolTag && _tokenBuf.includes('<tool:')) {
+            _inToolTag = true;
+            const tagStart = _tokenBuf.indexOf('<tool:');
+            const before   = _tokenBuf.slice(0, tagStart);
+            _tokenBuf      = _tokenBuf.slice(tagStart);
+            if (before) {
+              if (!tui._streamStarted) {
+                tui._streamStarted = true;
+                if (tui._dots) { clearInterval(tui._dots); tui._dots = null; }
+                tui.thinking = false;
+                process.stdout.write('\x1b[2K\r');
+                tui._kiraPrompt();
+              }
+              process.stdout.write(chalk.hex('#fce8f0')(before));
+            }
+            return;
+          }
+
+          // inside tool tag — wait for closing tag
+          if (_inToolTag) {
+            if (_tokenBuf.includes('</tool>')) {
+              const after = _tokenBuf.slice(_tokenBuf.indexOf('</tool>') + 7);
+              _tokenBuf   = after;
+              _inToolTag  = false;
+              if (after.trim()) {
+                process.stdout.write(chalk.hex('#fce8f0')(after));
+              }
+            }
+            return;
+          }
+
+          // normal text — print immediately
+          if (!tui._streamStarted) {
+            tui._streamStarted = true;
+            if (tui._dots) { clearInterval(tui._dots); tui._dots = null; }
+            tui.thinking = false;
+            process.stdout.write('\x1b[2K\r');
+            tui._kiraPrompt();
+          }
+          process.stdout.write(chalk.hex('#fce8f0')(_tokenBuf));
+          _tokenBuf = '';
+        },
+        // onTool — newline before tool output so it doesn't clash
         (name, args, result) => {
           if (result !== null && result !== undefined && result !== '') {
+            if (tui._streamStarted) process.stdout.write('\n');
             tui.addMessage('tool', `${String(result).slice(0, 100)}`);
           }
         },
-        (reply) => {
-          tui.setThinking(false);
-          if (reply) tui.addMessage('agent', reply);
+        // onReply
+        (reply, aborted) => {
+          _tokenBuf          = '';
+          _inToolTag         = false;
+          _inThinkTag        = false;
+          tui._streamStarted = false;
+          tui.thinking       = false;
+          if (!aborted) {
+            process.stdout.write('\n');
+            tui._showPrompt();
+          }
         }
       );
     } catch (e) {
+      tui._streamStarted = false;
       tui.setThinking(false);
       tui.addMessage('error', e.message);
     }
@@ -165,10 +286,10 @@ async function main() {
     scheduler.start({ telegram, loop, tui });
   } catch {}
 
-  // Start proactive mode if enabled
+  // Start proactive mode — passes tui and loop so it can speak up
   try {
     const proactive = require('./core/proactive');
-    proactive.start();
+    proactive.start({ tui, loop });
   } catch {}
 
   // Start telegram after TUI is ready
@@ -179,3 +300,33 @@ async function main() {
 }
 
 main();
+
+// ── Graceful shutdown — runs on Ctrl+C, swipe away, kill signal ──────────────
+// This ensures sleep consolidation runs even when user doesn't type /exit
+let _shuttingDown = false;
+
+async function gracefulShutdown(signal) {
+  if (_shuttingDown) return;
+  _shuttingDown = true;
+
+  process.stdout.write('\n' + chalk.hex('#7a4060')('  saving...\n'));
+
+  try {
+    loop.abort();
+
+    // M2.7 self-evolution sleep cycle
+    await soul.updateDocs(engine);
+    await soul.selfImprove(engine);
+    await nexus.sleep(engine);
+
+    heartbeat.stop(true);
+  } catch {}
+
+  process.stdout.write(chalk.hex('#7a4060')('  done.\n'));
+  process.exit(0);
+}
+
+process.once('SIGINT',  () => gracefulShutdown('SIGINT'));
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGHUP',  () => gracefulShutdown('SIGHUP'));
+
