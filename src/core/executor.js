@@ -40,6 +40,9 @@ async function execute(description, tools, successCondition, onTool) {
       }
 
       mind.updateTask(taskId, succeeded ? 'done' : 'active', resultStr);
+      
+      // If we've succeeded, we can stop executing the sequence of tools
+      if (succeeded) break;
 
     } catch (e) {
       lastResult = `error: ${e.message}`;
@@ -74,6 +77,14 @@ function _verify(result, successCondition) {
   return result.length > 5;
 }
 
+function inferSuccessCondition(tools) {
+  const names = tools.map(t => t.name).join(' ');
+  if (names.includes('sms_send') || names.includes('gmail_send')) return 'sent successfully';
+  if (names.includes('exec')) return 'no error';
+  if (names.includes('open_app')) return 'opened';
+  return null;
+}
+
 function _withTimeout(promise, ms) {
   return Promise.race([
     promise,
@@ -102,4 +113,4 @@ function cleanReply(text) {
     .trim();
 }
 
-module.exports = { execute, parseTools, cleanReply };
+module.exports = { execute, parseTools, cleanReply, inferSuccessCondition };

@@ -153,6 +153,14 @@ async function main() {
       process.stdout.write('\n' + chalk.hex('#7a4060')('  ↩ interrupted\n'));
     }
 
+    // Special queue abort signal — user typed while streaming
+    if (input === '__QUEUE_ABORT__') {
+      loop.abort();
+      tui.setThinking(false);
+      process.stdout.write('\n' + chalk.hex('#7a4060')('  ↩ input queued — processing now\n'));
+      return;
+    }
+
     // token buffer for filtering tool tags and think blocks mid-stream
     let _tokenBuf   = '';
     let _inToolTag  = false;

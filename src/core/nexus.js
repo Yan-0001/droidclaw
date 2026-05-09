@@ -12,8 +12,12 @@
  * One truth. Always coherent.
  */
 
-const mind   = require('./mind');
-const config = require('../config');
+const mind     = require('./mind');
+const emotion = require('./emotion');
+const config  = require('../config');
+
+// track last update time for timed decay
+let _lastPulseAt = Date.now();
 
 // ── Context selection — intelligent, not concatenation ────────────────────────
 function buildContext(userMessage = '') {
@@ -21,9 +25,10 @@ function buildContext(userMessage = '') {
   const cfg      = config.load();
 
   // ── 1. Live state — always first ─────────────────────────────────────────
-  const emotion   = _getEmotionContext();
-  const device    = _getDeviceContext();
-  const mood      = mind.getMood();
+  const emotionState = mind.getEmotionState();
+  const emotion      = _getEmotionContextFromState(emotionState);
+  const device       = _getDeviceContext();
+  const mood         = mind.getMood();
 
   if (emotion || device) {
     const parts = [];
@@ -44,7 +49,7 @@ function buildContext(userMessage = '') {
   }
 
   // ── 3. Relevant memories — query-specific ────────────────────────────────
-  const emotionState = _getRawEmotionState();
+  // emotionState already declared above — reuse it
   const memories = mind.retrieveMemories(userMessage, 5, emotionState);
   if (memories.length) {
     const grouped = {};
@@ -106,14 +111,18 @@ function buildContext(userMessage = '') {
 }
 
 // ── Update KIRA_MIND after a message exchange ─────────────────────────────────
-function pulse(message, role, emotionUpdate = null) {
-  // update emotion state
-  if (emotionUpdate) {
-    mind.setState('emotion_tension',    emotionUpdate.tension    || 0);
-    mind.setState('emotion_connection', emotionUpdate.connection || 0.5);
-    mind.setState('emotion_focus',      emotionUpdate.focus      || 0.5);
-    mind.setState('emotion_energy',     emotionUpdate.energy     || 0.8);
-  }
+function pulse(message, role) {
+  const now    = Date.now();
+  const elapsed = (now - _lastPulseAt) / 60000; // minutes since last pulse
+  _lastPulseAt = now;
+
+  // Load current emotion state and apply decay + message update
+  const current = mind.getEmotionState();
+  const decayed  = emotion.applyTimedDecay(current, elapsed);
+  const updated  = emotion.update(decayed, message, role);
+  
+  // Store in KIRA_MIND (using setEmotionState applies inertia automatically)
+  mind.setEmotionState(updated);
 
   // log conversation
   if (message) mind.logConversation(role, message);
@@ -236,29 +245,23 @@ Be brutally honest. Vague improvements are useless.`
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function _getEmotionContext() {
-  const tension    = parseFloat(mind.getState('emotion_tension')    || 0);
-  const connection = parseFloat(mind.getState('emotion_connection') || 0.5);
-  const energy     = parseFloat(mind.getState('emotion_energy')     || 0.8);
-  const focus      = parseFloat(mind.getState('emotion_focus')      || 0.5);
-
+function _getEmotionContextFromState(state) {
   const parts = [];
-  if (energy < 0.3)        parts.push('exhausted');
-  else if (energy < 0.55)  parts.push('low energy');
-  if (tension > 0.6)       parts.push('tension high');
-  else if (tension > 0.3)  parts.push('mild tension');
-  if (connection > 0.7)    parts.push('close conversation');
-  if (focus > 0.7)         parts.push('deep focus');
-
+  if (state.energy < 0.3)        parts.push('exhausted');
+  else if (state.energy < 0.55)  parts.push('low energy');
+  if (state.tension > 0.6)       parts.push('tension high');
+  else if (state.tension > 0.3)  parts.push('mild tension');
+  if (state.connection > 0.7)    parts.push('close conversation');
+  if (state.focus > 0.7)         parts.push('deep focus');
   return parts.length ? parts.join(', ') : null;
 }
 
 function _getRawEmotionState() {
   return {
     tension:    parseFloat(mind.getState('emotion_tension')    || 0),
-    connection: parseFloat(mind.getState('emotion_connection') || 0.5),
-    energy:     parseFloat(mind.getState('emotion_energy')     || 0.8),
+    connection: parseFloat(mind.getState('emotion_connection') || 0.4),
     focus:      parseFloat(mind.getState('emotion_focus')      || 0.5),
+    energy:     parseFloat(mind.getState('emotion_energy')     || 0.8),
   };
 }
 
@@ -289,7 +292,7 @@ function _getWorldContext() {
 }
 
 function _buildPrediction(message, emotionState, beliefs) {
-  if (!message || !emotionState) return null;
+  if (!message) return null;
 
   const predictions = [];
   const tension = emotionState.tension || 0;

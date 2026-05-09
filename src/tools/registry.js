@@ -5,6 +5,7 @@ const os   = require('os');
 
 const tools    = {};
 const LOG_FILE = path.join(os.homedir(), '.droidclaw', 'tool_log.json');
+let _logBuffer = [];
 
 function register(name, fn, description) {
   tools[name] = { fn, description: description || '' };
@@ -29,15 +30,25 @@ function listWithDescriptions() {
 }
 
 function _log(entry) {
+  _logBuffer.push(entry);
+  if (_logBuffer.length >= 10) flushLogs();
+}
+
+function flushLogs() {
+  if (_logBuffer.length === 0) return;
   try {
     const dir = path.join(os.homedir(), '.droidclaw');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     let log = [];
     if (fs.existsSync(LOG_FILE)) { try { log = JSON.parse(fs.readFileSync(LOG_FILE, 'utf8')); } catch {} }
-    log.push(entry);
-    if (log.length > 200) log = log.slice(-200);
+    log = [...log, ..._logBuffer].slice(-200);
     fs.writeFileSync(LOG_FILE, JSON.stringify(log, null, 2));
+    _logBuffer = [];
   } catch {}
 }
 
-module.exports = { register, execute, list, listWithDescriptions };
+process.on('exit', flushLogs);
+process.on('SIGINT', () => { flushLogs(); process.exit(0); });
+process.on('SIGTERM', () => { flushLogs(); process.exit(0); });
+
+module.exports = { register, execute, list, listWithDescriptions, flushLogs };

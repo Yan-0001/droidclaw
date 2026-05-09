@@ -10,10 +10,11 @@
  * Nobody else has this because nobody else has SOMA.
  */
 
-const fs = require('fs');
-const os = require('os');
+const fs     = require('fs');
+const os     = require('os');
 
 const IRIS_FILE = os.homedir() + '/.droidclaw/iris_patterns.json';
+let _irisCache = null;
 
 // ─── Response Profiles ────────────────────────────────────────────────────────
 // Each profile defines how Kira should respond
@@ -125,8 +126,14 @@ function classifyQuery(message) {
 
 function route(message, emotionState, lpm) {
   const baseProfile = classifyQuery(message);
-  const emotion     = emotionState || { tension: 0, energy: 0.8, connection: 0.5, focus: 0.5 };
-  const data        = loadPatterns();
+  // Try to read emotion state from KIRA_MIND via mind module
+  let activeEmotion = null;
+  try {
+    const mind = require('./mind');
+    activeEmotion = mind.getEmotionState();
+  } catch {}
+  const emotion = emotionState || activeEmotion || { tension: 0, energy: 0.8, connection: 0.5, focus: 0.5 };
+  const data    = loadPatterns();
 
   let finalProfile  = baseProfile;
 
@@ -175,7 +182,7 @@ function route(message, emotionState, lpm) {
 
   // ── Fixed overrides — these always apply regardless of history ──────────────
   if (emotion.tension > 0.6 && !['SHARP', 'REFLEX'].includes(finalProfile)) finalProfile = 'GENTLE';
-  if (baseProfile === 'GENTLE_CANDIDATE') finalProfile = emotion.tension > 0.2 ? 'GENTLE' : 'BALANCED';
+  if (baseProfile === 'GENTLE_CANDIDATE') finalProfile = 'GENTLE';
   if (emotion.energy < 0.3 && finalProfile === 'DEEP') finalProfile = 'BALANCED';
   if (emotion.focus > 0.7 && finalProfile === 'BALANCED') finalProfile = 'DEEP';
 
@@ -280,12 +287,22 @@ function getStats() {
 }
 
 function loadPatterns() {
-  try { return JSON.parse(fs.readFileSync(IRIS_FILE, 'utf8')); }
-  catch { return { decisions: [], totalRouted: 0 }; }
+  if (_irisCache) return _irisCache;
+  try { 
+    _irisCache = JSON.parse(fs.readFileSync(IRIS_FILE, 'utf8')); 
+    return _irisCache;
+  }
+  catch { 
+    _irisCache = { decisions: [], totalRouted: 0 }; 
+    return _irisCache; 
+  }
 }
 
 function savePatterns(data) {
-  try { fs.writeFileSync(IRIS_FILE, JSON.stringify(data, null, 2)); }
+  try { 
+    _irisCache = data;
+    fs.writeFileSync(IRIS_FILE, JSON.stringify(data, null, 2)); 
+  }
   catch {}
 }
 

@@ -97,54 +97,35 @@ class AgentLoop {
     // tool execution — use EXECUTOR for verification
     while (tools.length > 0 && iter < MAX_ITER) {
       iter++;
-      let toolResults = '';
 
-      // detect if this looks like a task with a success condition
-      const taskDesc = reply || userMessage;
-      const successCondition = _inferSuccessCondition(tools);
+      const taskDesc       = reply || userMessage;
+      const successCondition = executor.inferSuccessCondition(tools);
 
-      for (const tool of tools) {
-        onTool && onTool(tool.name, tool.args, null);
-        try {
-          const result = await _withTimeout(
-            require('../tools/registry').execute(tool.name, tool.args),
-            10000
-          );
-          const rs = String(result || '').slice(0, 1000);
-          toolResults += `[${tool.name}]: ${rs}\n`;
-          onTool && onTool(tool.name, tool.args, rs);
+      const { succeeded, lastResult } = await executor.execute(
+        taskDesc,
+        tools,
+        successCondition,
+        (name, args, result) => { onTool && onTool(name, args, result); }
+      );
 
-          const succeeded = !rs.toLowerCase().includes('error') &&
-                            !rs.toLowerCase().includes('failed') &&
-                            !rs.toLowerCase().includes('not found');
-          if (succeeded) mind.recordSuccess();
-          else mind.recordFailure();
+      if (succeeded) mind.recordSuccess();
+      else           mind.recordFailure();
 
-          // track skill performance
-          try {
-            const sm = require('./skill_matcher');
-            sm.recordSkillUse(tool.name, succeeded);
-          } catch {}
-
-        } catch (e) {
-          toolResults += `[${tool.name}] error: ${e.message}\n`;
-          onTool && onTool(tool.name, tool.args, `error: ${e.message}`);
-          mind.recordFailure();
-          try {
-            const sm = require('./skill_matcher');
-            sm.recordSkillUse(tool.name, false);
-          } catch {}
-        }
-      }
-
-      engine.history.push({ role: 'user', content: `[tool results]\n${toolResults}\nrespond now.` });
+      // update context for the next turn
+      engine.history.push({ role: 'user', content: `[execution result]: ${lastResult}\nrespond now.` });
       onThink && onThink();
+
       fullText = await this._streamTurn('', onToken);
       if (fullText === null) { onReply && onReply('', true); return; }
 
       const cleanFull = _cleanOutput(fullText);
-      const idx = engine.history.findLastIndex(m => m.content.startsWith('[tool results]'));
-      if (idx !== -1) engine.history.splice(idx, 1);
+      // remove the previous [execution result] to prevent history bloat
+      if (engine.history.length > 0) {
+        const last = engine.history[engine.history.length - 1];
+        if (last.content.startsWith('[execution result]')) {
+          engine.history.pop();
+        }
+      }
       tools = executor.parseTools(cleanFull);
       reply = executor.cleanReply(cleanFull);
     }
@@ -173,21 +154,6 @@ class AgentLoop {
 
 function _cleanOutput(text) {
   return text.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-}
-
-function _inferSuccessCondition(tools) {
-  const names = tools.map(t => t.name).join(' ');
-  if (names.includes('sms_send') || names.includes('gmail_send')) return 'sent successfully';
-  if (names.includes('exec')) return 'no error';
-  if (names.includes('open_app')) return 'opened';
-  return null;
-}
-
-function _withTimeout(promise, ms) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('timed out')), ms))
-  ]);
 }
 
 module.exports = new AgentLoop();

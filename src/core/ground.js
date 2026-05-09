@@ -25,26 +25,23 @@ let _running  = false;
 let _onUpdate = null; // callback when significant change detected
 
 // ── HTTP helper ───────────────────────────────────────────────────────────────
-function _get(endpoint) {
+async function _get(endpoint) {
   try {
-    const result = spawnSync('curl', ['-s', '-m', '5', `${KIRA_BASE}${endpoint}`], {
-      encoding: 'utf8', timeout: 6000
-    });
-    if (result.error || result.status !== 0) return null;
-    return JSON.parse(result.stdout);
+    const res = await fetch(`${KIRA_BASE}${endpoint}`);
+    if (!res.ok) return null;
+    return await res.json();
   } catch { return null; }
 }
 
-function _post(endpoint, body) {
+async function _post(endpoint, body) {
   try {
-    const result = spawnSync('curl', [
-      '-s', '-m', '5', '-X', 'POST',
-      `${KIRA_BASE}${endpoint}`,
-      '-H', 'Content-Type: application/json',
-      '-d', JSON.stringify(body)
-    ], { encoding: 'utf8', timeout: 6000 });
-    if (result.error || result.status !== 0) return null;
-    return JSON.parse(result.stdout);
+    const res = await fetch(`${KIRA_BASE}${endpoint}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) return null;
+    return await res.json();
   } catch { return null; }
 }
 
@@ -107,7 +104,7 @@ function _detectAppFromClasses(nodes) {
 async function _analyzeScreen() {
   try {
     // get screenshot as base64 from KiraService
-    const res = _get('/screenshot_image');
+    const res = await _get('/screenshot_image');
     if (!res || !res.image) return null;
 
     const base64 = res.image.replace(/\n/g, '');
@@ -216,7 +213,7 @@ async function _snapshot() {
   }
 
   // ── Notifications ─────────────────────────────────────────────────────────
-  const notifs = _get('/notifications');
+  const notifs = await _get('/notifications');
   if (notifs && notifs.length) {
     snap.notifications = notifs.slice(0, 20).map(n => ({
       pkg:   n.package,
@@ -229,7 +226,7 @@ async function _snapshot() {
   }
 
   // ── Physical sensors ──────────────────────────────────────────────────────
-  const sensors = _get('/sensors');
+  const sensors = await _get('/sensors');
   if (sensors) {
     snap.sensors = sensors;
     // detect if phone is face down (proximity near + accelerometer z negative)

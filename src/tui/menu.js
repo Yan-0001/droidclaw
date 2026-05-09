@@ -52,19 +52,24 @@ function createMenu(title, items, tui) {
 
     // Already in raw mode from TUI — just listen
     const onData = (chunk) => {
-      for (let i = 0; i < chunk.length; i++) {
-        const byte = chunk.charCodeAt ? chunk.charCodeAt(i) : chunk[i];
-        const c    = typeof chunk === 'string' ? chunk[i] : String.fromCharCode(chunk[i]);
+      try {
+        for (let i = 0; i < chunk.length; i++) {
+          const byte = chunk.charCodeAt ? chunk.charCodeAt(i) : chunk[i];
+          const c    = typeof chunk === 'string' ? chunk[i] : String.fromCharCode(chunk[i]);
 
-        if (byte === 27) continue; // ESC — skip, handle sequences
-        if (c === '[') continue;   // part of escape sequence
+          if (byte === 27) continue; // ESC — skip, handle sequences
+          if (c === '[') continue;   // part of escape sequence
 
-        if      (c === 'k' || c === 'A') { selected = (selected - 1 + items.length) % items.length; render(true); }
-        else if (c === 'j' || c === 'B') { selected = (selected + 1) % items.length; render(true); }
-        else if (byte === 13)            { cleanup(); resolve(selected); return; }
-        else if (c === ' ')              { cleanup(); resolve(selected); return; }
-        else if (c === 'q')              { cleanup(); resolve(-1); return; }
-        else if (byte === 3)             { process.exit(0); }
+          if      (c === 'k' || c === 'A') { selected = (selected - 1 + items.length) % items.length; render(true); }
+          else if (c === 'j' || c === 'B') { selected = (selected + 1) % items.length; render(true); }
+          else if (byte === 13)            { cleanup(); resolve(selected); return; }
+          else if (c === ' ')              { cleanup(); resolve(selected); return; }
+          else if (c === 'q')              { cleanup(); resolve(-1); return; }
+          else if (byte === 3)             { cleanup(); process.exit(0); }
+        }
+      } catch (e) {
+        cleanup();
+        resolve(-1);
       }
     };
 

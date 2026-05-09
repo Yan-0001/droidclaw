@@ -93,10 +93,7 @@ ${workspace.buildContext()}`;
 
   _getLastSeen() {
     try {
-      const row = mind.db().prepare(`
-        SELECT created_at FROM conversations
-        WHERE role='user' ORDER BY created_at DESC LIMIT 1
-      `).get();
+      const row = mind.getLastUserMessage();
       if (!row) return 'first session';
       const diff = Date.now() / 1000 - row.created_at;
       if (diff < 120)   return 'just now';

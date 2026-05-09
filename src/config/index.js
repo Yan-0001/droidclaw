@@ -24,31 +24,52 @@ function ensure() {
   if (!fs.existsSync(CONFIG_DIR)) fs.mkdirSync(CONFIG_DIR, { recursive: true });
 }
 
+function _resolveValue(val) {
+  if (typeof val === 'string' && val.startsWith('$')) {
+    const envVar = val.slice(1);
+    return process.env[envVar] || val;
+  }
+  return val;
+}
+
 function load() {
-  if (_cache) return _cache;
-  ensure();
-  if (!fs.existsSync(CONFIG_FILE)) { _cache = { ...DEFAULTS }; return _cache; }
-  try { _cache = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) }; }
-  catch { _cache = { ...DEFAULTS }; }
-  return _cache;
+  if (!_cache) {
+    ensure();
+    if (!fs.existsSync(CONFIG_FILE)) { 
+      _cache = { ...DEFAULTS }; 
+    } else {
+      try { 
+        _cache = { ...DEFAULTS, ...JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) }; 
+      } catch { 
+        _cache = { ...DEFAULTS }; 
+      }
+    }
+  }
+  
+  const resolved = { ..._cache };
+  Object.keys(resolved).forEach(key => {
+    resolved[key] = _resolveValue(resolved[key]);
+  });
+  return resolved;
 }
 
 function save(data) {
   ensure();
-  // Validate required fields
   if (typeof data !== 'object' || !data) return;
   const valid = { ...DEFAULTS, ...data };
   _cache = valid;
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(valid, null, 2));
 }
 
-function get(key) { return load()[key]; }
+function get(key) { 
+  if (!_cache) load();
+  return _resolveValue(_cache[key]); 
+}
 
 function set(key, value) {
-  const c = load();
-  c[key]  = value;
-  _cache  = c;
-  save(c);
+  if (!_cache) load();
+  _cache[key] = value;
+  save(_cache);
 }
 
 function invalidate() { _cache = null; }

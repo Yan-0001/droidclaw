@@ -42,6 +42,8 @@ class TUI {
     this._termWidth     = process.stdout.columns || 80;
     this._escBuf        = '';          // buffer for escape sequences
     this._escTimer      = null;
+    this._messageQueue  = [];          // queue for messages arrived during streaming
+    this._queuedInput   = null;        // user's message typed during streaming
   }
 
   async init(onInput) {
@@ -144,9 +146,21 @@ class TUI {
       this._historyIdx = -1;
       this._savedInput = '';
       process.stdout.write('\n');
+      
       if (input) {
         if (this._history[0] !== input) this._history.unshift(input);
         if (this._history.length > 50) this._history.pop();
+        
+        // If TUI is actively streaming, queue this message and show indicator
+        if (this._streaming || this._streamStarted) {
+          this._queuedInput = input;
+          // Print queue indicator inline where the prompt would be
+          process.stdout.write(chalk.hex(C.hint)(`  queue: ${input.slice(0, 40)}${input.length > 40 ? '...' : ''}\n`));
+          // Abort the current stream so we can process the queued message
+          if (this.onInput) this.onInput('__QUEUE_ABORT__');
+          return;
+        }
+        
         if (this.onInput) this.onInput(input);
       } else {
         this._showPrompt();
@@ -232,9 +246,11 @@ class TUI {
 
   // word-wrap — strips markdown markers for width calculation
   _wrap(text) {
+    if (!text) return '';
+    const str = String(text);
     const max = Math.max(20, this._termWidth - 12);
     const lines = [];
-    for (const para of text.split('\n')) {
+    for (const para of str.split('\n')) {
       // visible length — ignore markdown bold/italic markers
       const visibleLen = para.replace(/\*\*?|__?/g, '').length;
       if (visibleLen <= max) { lines.push(para); continue; }
@@ -257,6 +273,11 @@ class TUI {
   }
 
   addMessage(type, text) {
+    if (this._streaming) {
+      this._messageQueue.push({ type, text });
+      return;
+    }
+
     // don't clear mid-stream — only clear if not streaming
     if (!this._streaming) process.stdout.write('\x1b[2K\r');
     const str = String(text);
@@ -271,12 +292,24 @@ class TUI {
         this._streamStarted = false;
         this._streaming     = false;
         this._pendingTools  = 0;
-        this._showPrompt();
+        
+        // Flush queued messages and check for queued user input
+        while (this._messageQueue.length > 0) {
+          const msg = this._messageQueue.shift();
+          this.addMessage(msg.type, msg.text);
+        }
+        
+        // If user typed during streaming, process their queued message now
+        if (this._queuedInput !== null) {
+          const queued = this._queuedInput;
+          this._queuedInput = null;
+          if (this.onInput) this.onInput(queued);
+        } else {
+          this._showPrompt();
+        }
       });
 
     } else if (type === 'tool') {
-      // only show tool output if not currently streaming kira text
-      if (this._streaming) return;
       this._pendingTools++;
       const clean = str.split('\n')[0].slice(0, 72);
       if (this._pendingTools === 1) {
@@ -286,7 +319,6 @@ class TUI {
       }
 
     } else if (type === 'system') {
-      if (this._streaming) return; // don't interrupt stream
       // single line only — truncate if needed
       const oneline = str.replace(/\n/g, ' ').trim().slice(0, 80);
       process.stdout.write(chalk.hex(C.muted)(`  ${oneline}\n`));

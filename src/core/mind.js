@@ -87,6 +87,7 @@ let _decayTimer = null;
 function init() {
   if (!fs.existsSync(DIR)) fs.mkdirSync(DIR, { recursive: true });
   Object.keys(FILES).forEach(_load);
+  initTasks();
 
   // run memory decay every 30 minutes during session — not just at sleep
   if (!_decayTimer) {
@@ -97,16 +98,19 @@ function init() {
   }
 }
 
-// fake db() for soul.js lastSeen query
+// helper for soul.js to avoid simulated SQL
+function getLastUserMessage() {
+  const convs = _load('conversations')
+    .filter(c => c.role === 'user')
+    .sort((a, b) => b.created_at - a.created_at);
+  return convs[0] || null;
+}
+
+// fake db() for legacy support
 function db() {
   return {
     prepare: () => ({
-      get: () => {
-        const convs = _load('conversations')
-          .filter(c => c.role === 'user')
-          .sort((a, b) => b.created_at - a.created_at);
-        return convs[0] || null;
-      },
+      get: () => getLastUserMessage(),
       all: () => [],
       run: () => {},
     }),
@@ -135,7 +139,8 @@ let _pid = Date.now();
 
 function upsertBelief(dimension, value, options = {}) {
   const people = _load('person');
-  const valKey = value.toLowerCase().slice(0, 40);
+  if (!value) return; // ignore null/empty values
+  const valKey = String(value).toLowerCase().slice(0, 40);
   const existing = people.find(p =>
     p.dimension === dimension && p.value.toLowerCase().slice(0, 40) === valKey && !p.contradicted
   );
@@ -227,6 +232,12 @@ function decayMemories() {
 
 // ── TASKS ─────────────────────────────────────────────────────────────────────
 let _tid = 1;
+function initTasks() {
+  const tasks = _load('tasks');
+  if (tasks.length > 0) {
+    _tid = Math.max(...tasks.map(t => t.id)) + 1;
+  }
+}
 function createTask(description, successCondition = null) {
   const tasks = _load('tasks');
   const id    = _tid++;
@@ -270,6 +281,51 @@ function setMood(mood) { setKiraState('mood', mood, 1); }
 function getMood() {
   const moods = _load('kira').filter(k => k.type === 'mood').sort((a, b) => b.created_at - a.created_at);
   return moods[0]?.value || 'neutral';
+}
+
+// ── EMOTION STATE ────────────────────────────────────────────────────────────
+// Unified emotion state stored in KIRA_MIND.
+// emotion.js uses this instead of its own JSON file.
+// Inertia: how resistant each dimension is to change (0=instant, 1=never changes)
+const EMOTION_INERTIA = {
+  tension:    0.75,
+  connection: 0.88,
+  focus:      0.70,
+  energy:     0.92,
+};
+
+function getEmotionState() {
+  return {
+    tension:    parseFloat(getState('emotion_tension')    || 0),
+    connection: parseFloat(getState('emotion_connection') || 0.4),
+    focus:      parseFloat(getState('emotion_focus')      || 0.5),
+    energy:     parseFloat(getState('emotion_energy')     || 0.8),
+  };
+}
+
+function setEmotionState(updates) {
+  // Apply inertia: higher inertia = slower change
+  const current = getEmotionState();
+  for (const [dim, newVal] of Object.entries(updates)) {
+    const inertia = EMOTION_INERTIA[dim] || 0.8;
+    const currentVal = current[dim] || 0;
+    // Lerp toward target: new = current * inertia + target * (1 - inertia)
+    const next = currentVal * inertia + newVal * (1 - inertia);
+    setState(`emotion_${dim}`, Math.max(0, Math.min(1, next)));
+  }
+}
+
+function decayEmotionState(elapsedMinutes) {
+  // Drift each dimension toward baseline over time
+  const BASELINE = { tension: 0.0, connection: 0.4, focus: 0.5, energy: 0.7 };
+  const DECAY = { tension: 0.04, connection: 0.01, focus: 0.06, energy: 0.02 };
+  const current = getEmotionState();
+  const updates = {};
+  for (const dim of Object.keys(BASELINE)) {
+    const decay = Math.min(DECAY[dim] * elapsedMinutes, 0.5);
+    updates[dim] = current[dim] + (BASELINE[dim] - current[dim]) * decay;
+  }
+  setEmotionState(updates);
 }
 
 // ── CONVERSATIONS ─────────────────────────────────────────────────────────────
@@ -410,8 +466,9 @@ function getBehavioralNudge() {
 function invalidate() {} // no-op — mind uses in-memory cache always fresh
 
 module.exports = {
-  init, db,
+  init, db, getLastUserMessage,
   setState, getState, getAllState,
+
   upsertBelief, contradictBelief, getBeliefs,
   storeMemory, retrieveMemories, decayMemories,
   createTask, updateTask, getActiveTask, getRecentTasks,
@@ -423,6 +480,8 @@ module.exports = {
   recordSuccess, recordFailure, recordToolBuilt,
   incrementConversations, shouldReflect, markReflected,
   getBehavioralNudge, invalidate,
+  // emotion state (unified in KIRA_MIND)
+  getEmotionState, setEmotionState, decayEmotionState,
   flush: _flush,
   get sessionId() { return _sessionId; },
 };
