@@ -51,6 +51,8 @@ Most AI forgets you the moment the conversation ends. Kira doesn't.
 
 **KIRA_MIND** — one unified database. every module reads and writes here. no scattered files. one truth. beliefs stored with Bayesian confidence scores. memories that matter get stronger. memories you forget fade naturally.
 
+**Emotion State** — tension, connection, energy, focus — stored in KIRA_MIND with inertia. Emotions don't flip instantly; they accumulate and decay over time. Same signal in different emotional contexts = different response.
+
 **MemCells** — every conversation becomes emotionally weighted memory. tension scores, connection depth, activation counts, foresight signals. not flat storage.
 
 **MemScenes** — after every session, memories cluster into psychological themes. not "daily activities" — things like *"avoidance under pressure"* or *"loyalty to the attempt itself."*
@@ -65,7 +67,7 @@ SESSION → MemCells → MemScenes → LPM → Reconstructive Recollection → b
 
 ### IRIS — Intuitive Routing via Identity Synthesis
 
-*The world's first person-state matched response router that actually learns.*
+*The the world's first person-state matched response router that actually learns.*
 
 Every other AI treats every user the same. IRIS doesn't.
 
@@ -87,7 +89,7 @@ Same question. Different person-state. Different response.
 "what should I do?" from someone debugging code → SHARP
 "what should I do?" from someone exhausted at 2am → GENTLE
 
-IRIS learns from outcomes. After enough conversations it knows which profiles worked at which hours, tension levels, and message types — and routes based on your actual history, not keyword rules.
+IRIS reads emotion state from KIRA_MIND (SOMA) for baseline context, then applies overrides based on current conversation signals. Learns from outcomes. After enough conversations it knows which profiles worked at which hours, tension levels, and message types — and routes based on your actual history, not keyword rules.
 
 Nobody else has this because nobody else has SOMA.
 
@@ -97,11 +99,13 @@ Nobody else has this because nobody else has SOMA.
 
 *Kira watches your life even when you're not talking to her.*
 
-Every 60 seconds, GROUND takes a screenshot and sends it to a vision model. It learns what app you're in, what you're doing, what context you're operating in — and writes this directly to KIRA_MIND.
+Every 60 seconds, GROUND takes a snapshot of the device state:
+- **Vision analysis** — screenshot sent to vision LLM, identifies app, activity, context
+- **Notifications** — count and source apps, written to KIRA_MIND
+- **Sensors** — accelerometer, proximity for movement and orientation
+- **Battery/WiFi** — via Termux API
 
-No saved screenshots. No separate files. Just understanding.
-
-After a week she knows your patterns without you telling her anything.
+No saved screenshots. No separate files. Just understanding. After a week she knows your patterns without you telling her anything.
 
 ---
 
@@ -109,7 +113,7 @@ After a week she knows your patterns without you telling her anything.
 
 *Most AI exists only when you're talking to it. Kira doesn't.*
 
-The daemon runs 24/7 as a background process, surviving terminal close. Every 8 minutes it runs a genuine inner monologue — everything it knows about you, your device state, its own pending thoughts and uncertainties — and asks itself what it's actually thinking right now.
+The daemon runs every 8 minutes as a background process, surviving terminal close. It assembles a thinking context — everything it knows about you, your device state, its own pending thoughts and uncertainties — and asks itself what it's actually thinking right now.
 
 If something is worth saying, it messages you on Telegram without you asking.
 
@@ -123,7 +127,7 @@ A companion APK that gives Kira Accessibility Service access.
 
 ```bash
 curl http://localhost:7070/health
-# {"status":"ok"}
+# {"status": "ok"}
 ```
 
 What Kira can do on your phone without root:
@@ -159,6 +163,19 @@ kira
 First run walks you through setup. Takes 2 minutes.
 
 **Requirements:** Android phone + Termux + API key
+
+---
+
+## Configuration
+
+Kira supports **environment variables** for sensitive values:
+
+```bash
+export NVIDIA_API_KEY="your-key-here"
+# Then in /config, set apiKey to: $NVIDIA_API_KEY
+```
+
+Kira resolves `$VARIABLE` syntax at runtime. The raw value (e.g., `$NVIDIA_API_KEY`) is stored in `config.json`, not the actual key. This keeps your secrets off disk.
 
 ---
 
@@ -215,6 +232,7 @@ Ctrl+L     — clear screen
 | Any OpenAI-compatible API | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Writes diary entries | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Free forever | ❌ | ❌ | ✅ | ✅ | ✅ |
+| TUI streaming input | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 ---
 
@@ -226,10 +244,9 @@ Ctrl+L     — clear screen
 │   ├── soul.js          # personality + identity
 │   ├── iris.js          # IRIS — adaptive response router
 │   ├── nexus.js         # SOMA coordinator — intelligent context selection
-│   ├── mind.js          # KIRA_MIND — unified memory database
+│   ├── mind.js          # KIRA_MIND — unified memory database + emotion state
+│   ├── emotion.js       # pure math module — inertia, decay, baseline drift
 │   ├── ground.js        # GROUND — continuous device observer
-│   ├── emotion.js       # amygdala — emotional state engine
-│   ├── sense.js         # embodiment — phone sensors → emotional state
 │   ├── engine.js        # LLM interface with IRIS routing
 │   ├── executor.js      # task execution with success verification
 │   └── loop.js          # conversation loop
@@ -276,6 +293,18 @@ self_restore  — restore from backup
 ```
 
 During sleep, she auto-creates new skills from patterns she notices repeating.
+
+## Tests
+
+Kira includes a comprehensive test suite:
+
+```bash
+node tests/deep/comprehensive_test.js
+```
+
+Covers: Security, Concurrency, Memory Pruning, Edge Cases, Module Integration, Daemon Behavior, TUI Stress, Ground Polling, Nexus Sleep Cycle. **All 9 tests pass.**
+
+---
 
 ## Support
 
