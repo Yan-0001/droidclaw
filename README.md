@@ -220,19 +220,6 @@ Ctrl+L     — clear screen
 ## What Makes Kira Different
 
 | | ChatGPT | Claude | Openclaw | PicoClaw | **Kira** |
-|---|---|---|---|---|---|
-| Remembers you | ❌ resets | ❌ resets | 📄 files | 📄 files | ✅ SOMA LPM |
-| Runs on phone | ❌ | ❌ | 50/50 | ✅ | ✅ |
-| Emotional memory | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Predicts behavior | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Person-state routing | ❌ | ❌ | ❌ | ❌ | ✅ IRIS |
-| Phone control no root | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Watches your screen | ❌ | ❌ | ❌ | ❌ | ✅ GROUND |
-| Thinks while you sleep | ❌ | ❌ | ❌ | ❌ | ✅ DAEMON |
-| Any OpenAI-compatible API | ✅ | ❌ | ❌ | ❌ | ✅ |
-| Writes diary entries | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Free forever | ❌ | ❌ | ✅ | ✅ | ✅ |
-| TUI streaming input | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 ---
 
@@ -302,7 +289,7 @@ Kira includes a comprehensive test suite:
 node tests/deep/comprehensive_test.js
 ```
 
-Covers: Security, Concurrency, Memory Pruning, Edge Cases, Module Integration, Daemon Behavior, TUI Stress, Ground Polling, Nexus Sleep Cycle. **All 9 tests pass.**
+Covers: Security, Concurrency, Memory Pruning, Edge Cases, Module Integration, Daemon Behavior, TUI Stress, Ground Polling, Nexus Sleep Cycle. All 9 tests pass.
 
 ---
 
